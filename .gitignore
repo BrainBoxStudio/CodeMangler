@@ -12,3 +12,7 @@ Test/Unmangled/
 build/
 dist/
 *.spec
+.claude/scheduled_tasks.lock
+.claude/settings.json
+agents.md
+claude.md
