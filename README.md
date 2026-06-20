@@ -15,6 +15,51 @@ Phase 1 (MVP): CLI, input handling, language detection, secret/PII detection, fa
 replacement, mapping JSON, restore mode. Identifier renaming (Phase 2) and local LLM
 providers (Phase 3) are not implemented yet.
 
+## Use Case Flow
+
+Typical end-to-end flow when sharing mangled code/text with an external AI assistant
+(ChatGPT, Claude, etc.) and later restoring it after edits:
+
+```mermaid
+flowchart TD
+    A[Provide Text or Code input] --> B[Select Language<br/>or leave Auto-detect]
+    B --> C[Click Process / Mangle]
+    C --> D[Scan for sensitive data<br/>and code identifiers]
+    D --> E[Mangled output generated]
+    E --> F[Save sanitization_map.json<br/>Save Mangle]
+    E --> G[Copy mangled output]
+    G --> H[Paste into ChatGPT / Claude /<br/>other online platform]
+    H --> I[Review response and edit<br/>the mangled code]
+    I --> J[Open DeMangler]
+    F --> J
+    J --> K[Load sanitization_map.json<br/>Reset Mangle]
+    K --> L[Paste the modified mangled code]
+    L --> M[Restore original identifiers<br/>and sensitive values]
+    M --> N[Restored output, with the<br/>edits made in step I preserved]
+
+    subgraph Local["Local machine — nothing here ever leaves the device"]
+        A
+        B
+        C
+        D
+        E
+        F
+        K
+        L
+        M
+        N
+    end
+
+    subgraph External["External / online — sanitized data only"]
+        G
+        H
+        I
+    end
+```
+
+The mapping file (`sanitization_map.json`) is what makes step M possible — it never
+needs to be shared with the external platform, only kept locally until restore.
+
 ## Install
 
 ```bash
