@@ -1,0 +1,14 @@
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.pytest_cache/
+.coverage
+htmlcov/
+sanitization_map.json
+codemangler_ui.log
+Test/Mangled/
+Test/Unmangled/
+build/
+dist/
+*.spec
