@@ -29,8 +29,10 @@ _CATEGORY_TO_OPTION: dict[str, str] = {
     "method": "code_functions",
     "class": "code_classes",
     "struct": "code_classes",
+    "typedef": "code_classes",  # typedef/using/type-alias: a type name, gated with classes
     "interface": "code_interfaces",
     "enum": "code_enums",
+    "enum_member": "code_enums",  # gated together with the enum name itself
     "namespace": "code_namespaces",
     "constant": "code_constants",
 }

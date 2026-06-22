@@ -210,6 +210,25 @@ def test_typescript_output_has_no_syntax_errors():
     assert not ts_parser.has_syntax_errors(root)
 
 
+def test_typescript_type_alias_renamed_consistently():
+    src = (
+        "type Point = { x: number; y: number };\n"
+        "function origin(): Point {\n"
+        "  return { x: 0, y: 0 };\n"
+        "}\n"
+    )
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="typescript")
+
+    renamed = {c.original: c.replacement for c in changes if c.category == "typedef"}
+    assert renamed["Point"] == "Type001"
+    assert sanitized.count("Type001") == 2  # declaration + usage as a return type
+    assert "Point" not in sanitized
+    # Object-literal keys are never definitions -> never renamed.
+    assert "x: 0" in sanitized and "y: 0" in sanitized
+
+
 def test_javascript_and_typescript_restore_round_trip():
     src = (
         "interface Shape { area(): number; }\n"
@@ -307,6 +326,76 @@ def test_cpp_pointer_locals_and_params_are_renamed():
         assert name in renamed, f"{name!r} was not renamed"
     for name in ("pobj", "msh"):
         assert name not in sanitized
+
+
+def test_cpp_typedef_and_using_alias_renamed_consistently():
+    src = (
+        "typedef OldName NewName;\n"
+        "using OtherAlias = SomeBase;\n"
+        "NewName a;\n"
+        "OtherAlias b;\n"
+    )
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="cpp")
+
+    renamed = {c.original: c.replacement for c in changes if c.category == "typedef"}
+    assert renamed["NewName"] == "Type001"
+    assert renamed["OtherAlias"] == "Type002"
+    assert sanitized.count("Type001") == 2  # typedef + usage
+    assert sanitized.count("Type002") == 2  # using-alias + usage
+    # The underlying/right-hand-side type names are only ever referenced, not
+    # locally defined here, so they're correctly left untouched.
+    assert "OldName" in sanitized
+    assert "SomeBase" in sanitized
+
+
+def test_cpp_typedef_multi_declarator_and_function_pointer_renamed():
+    # Regression for the gap flagged in the future-enhancements backlog:
+    # parenthesized_declarator (the `(*name)` part of a function-pointer
+    # declarator) has no "declarator" field at all, unlike the other three
+    # wrapper kinds, so the existing field-name-based unwrap silently
+    # returned None for every function-pointer name.
+    src = "typedef int *A, *B;\ntypedef void (*FuncPtr)(int x);\nFuncPtr cb;\n"
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="cpp")
+
+    renamed = {c.original for c in changes if c.category == "typedef"}
+    assert {"A", "B", "FuncPtr"} <= renamed
+    assert "FuncPtr" not in sanitized
+    variable_renamed = {c.original for c in changes if c.category == "variable"}
+    assert "cb" in variable_renamed
+
+
+def test_cpp_enum_and_members_renamed_consistently():
+    src = "enum class Color { Red, Green, Blue };\nColor c = Color::Red;\n"
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="cpp")
+
+    by_category = {c.category: {ch.original for ch in changes if ch.category == c.category} for c in changes}
+    assert by_category["enum"] == {"Color"}
+    assert by_category["enum_member"] == {"Red", "Green", "Blue"}
+    assert "Color" not in sanitized
+    assert "Red" not in sanitized
+
+
+def test_cpp_typedef_using_enum_restore_round_trip():
+    src = (
+        "typedef void (*FuncPtr)(int x);\n"
+        "enum class Color { Red, Green };\n"
+        "FuncPtr cb;\n"
+        "Color c = Color::Red;\n"
+    )
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="cpp")
+
+    sanitization_map = build_map({"aliases.cpp": ("cpp", changes)})
+    file_changes = [c for c in sanitization_map.changes if c.file == "aliases.cpp"]
+    restored = restore_text(sanitized, file_changes)
+    assert restored == src
 
 
 def test_cpp_keywords_never_renamed_even_on_else_if_misparse():
@@ -474,6 +563,24 @@ def test_java_restore_round_trip():
     file_changes = [c for c in sanitization_map.changes if c.file == "Circle.java"]
     restored = restore_text(sanitized, file_changes)
     assert restored == _JAVA_SOURCE
+
+
+def test_java_enum_members_renamed_consistently():
+    src = (
+        "enum Color { RED, GREEN, BLUE; }\n"
+        "class Paint {\n"
+        "    Color c = Color.RED;\n"
+        "}\n"
+    )
+    settings = Settings()
+    generator = FakeValueGenerator()
+    sanitized, changes = anonymize_text(src, settings, generator, language="java")
+
+    by_category = {c.category: {ch.original for ch in changes if ch.category == c.category} for c in changes}
+    assert by_category["enum"] == {"Color"}
+    assert by_category["enum_member"] == {"RED", "GREEN", "BLUE"}
+    assert "Color" not in sanitized
+    assert "RED" not in sanitized
 
 
 def test_java_multi_declarator_field_renames_all_names():

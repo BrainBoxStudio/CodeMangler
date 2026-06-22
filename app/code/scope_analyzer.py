@@ -225,6 +225,12 @@ def _collect_js_ts(root, occurrences: list[RawOccurrence]) -> None:
                 occurrences.append(
                     RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "enum")
                 )
+        elif kind == "type_alias_declaration":  # TypeScript: type Y = X;
+            name_node = node.child_by_field_name("name")
+            if name_node is not None:
+                occurrences.append(
+                    RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "typedef")
+                )
 
         for i in range(node.child_count()):
             walk(node.child(i))
@@ -236,6 +242,14 @@ _CPP_DECLARATOR_WRAPPERS: frozenset[str] = frozenset(
     {"pointer_declarator", "reference_declarator", "array_declarator", "parenthesized_declarator"}
 )
 
+# Kinds a typedef declarator child can be, once the underlying type-spec node
+# (matched by byte-span against the "type" field, see _collect_cpp_typedef)
+# has been excluded — covers plain names, pointer/reference/array-wrapped
+# names, and function-pointer names (function_declarator, unwrapped below).
+_CPP_TYPEDEF_DECLARATOR_KINDS: frozenset[str] = (
+    frozenset({"type_identifier", "identifier", "function_declarator"}) | _CPP_DECLARATOR_WRAPPERS
+)
+
 
 def _unwrap_cpp_declarator(node):
     """Peel pointer/reference/array/parenthesized wrappers down to the
@@ -245,10 +259,66 @@ def _unwrap_cpp_declarator(node):
     a direct child — so callers that only checked the immediate child's kind
     silently dropped every pointer/reference/array local, parameter, and
     member field (the real bug behind `pobj`/`normals`/`msh` never being
-    renamed in a pasted SDK snippet)."""
+    renamed in a pasted SDK snippet).
+
+    parenthesized_declarator (the `(*name)` part of a function-pointer
+    declarator, e.g. `void (*FuncPtr)(int)`) has no "declarator" field at
+    all — unlike the other three wrappers — so it must be unwrapped
+    positionally (skip the literal '(' / ')' tokens) instead."""
     while node is not None and node.kind() in _CPP_DECLARATOR_WRAPPERS:
-        node = node.child_by_field_name("declarator")
+        if node.kind() == "parenthesized_declarator":
+            inner = None
+            for i in range(node.child_count()):
+                child = node.child(i)
+                if child.kind() not in ("(", ")"):
+                    inner = child
+                    break
+            node = inner
+        else:
+            node = node.child_by_field_name("declarator")
     return node
+
+
+def _cpp_typedef_declarator_name(declarator):
+    """Resolve the new name being introduced by one comma-separated declarator
+    in a `typedef ... ;` statement. Handles a plain name (`NewName`), a
+    pointer/reference/array-wrapped name (`*NewName`), and a function-pointer
+    name (`(*FuncPtr)(int)` — the name sits inside a function_declarator's own
+    "declarator" field, nested one level deeper than `_unwrap_cpp_declarator`
+    alone reaches)."""
+    if declarator.kind() == "function_declarator":
+        inner = declarator.child_by_field_name("declarator")
+        if inner is None:
+            return None
+        declarator = inner
+    name_node = _unwrap_cpp_declarator(declarator)
+    if name_node is not None and name_node.kind() in ("type_identifier", "identifier"):
+        return name_node
+    return None
+
+
+def _collect_cpp_typedef(node, occurrences: list[RawOccurrence]) -> None:
+    """`node` is a type_definition (`typedef <type> <declarator>, ...;`).
+
+    The grammar gives the underlying type a single "type" field (e.g. just
+    `char` out of `const char*`, or the whole `struct Foo {...}` out of
+    `typedef struct Foo {...} Bar;`) — every other declarator-shaped child is
+    one of the new name(s) being defined, support for the multi-declarator
+    form (`typedef int *A, *B;`) included, matching the existing multi-name
+    handling for field/local declarations elsewhere in this file."""
+    type_node = node.child_by_field_name("type")
+    type_span = (type_node.start_byte(), type_node.end_byte()) if type_node is not None else None
+    for i in range(node.child_count()):
+        child = node.child(i)
+        if type_span is not None and (child.start_byte(), child.end_byte()) == type_span:
+            continue
+        if child.kind() not in _CPP_TYPEDEF_DECLARATOR_KINDS:
+            continue
+        name_node = _cpp_typedef_declarator_name(child)
+        if name_node is not None:
+            occurrences.append(
+                RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "typedef")
+            )
 
 
 def _collect_cpp_params(params_node, occurrences: list[RawOccurrence]) -> None:
@@ -303,6 +373,32 @@ def _collect_cpp(root, occurrences: list[RawOccurrence]) -> None:
             if name_node is not None:
                 occurrences.append(
                     RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "namespace")
+                )
+        elif kind == "enum_specifier":
+            name_node = node.child_by_field_name("name")
+            if name_node is not None:
+                occurrences.append(
+                    RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "enum")
+                )
+            body = node.child_by_field_name("body")
+            if body is not None:
+                for i in range(body.child_count()):
+                    member = body.child(i)
+                    if member.kind() == "enumerator":
+                        member_name = member.child_by_field_name("name")
+                        if member_name is not None:
+                            occurrences.append(
+                                RawOccurrence(
+                                    member_name.start_byte(), member_name.end_byte(), True, "enum_member"
+                                )
+                            )
+        elif kind == "type_definition":  # typedef ... ;
+            _collect_cpp_typedef(node, occurrences)
+        elif kind == "alias_declaration":  # using NewName = OldName;
+            name_node = node.child_by_field_name("name")
+            if name_node is not None:
+                occurrences.append(
+                    RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "typedef")
                 )
         elif kind == "function_definition":
             declarator = node.child_by_field_name("declarator")
@@ -407,6 +503,18 @@ def _collect_java(root, occurrences: list[RawOccurrence]) -> None:
                 occurrences.append(
                     RawOccurrence(name_node.start_byte(), name_node.end_byte(), True, "enum")
                 )
+            body = node.child_by_field_name("body")
+            if body is not None:
+                for i in range(body.child_count()):
+                    member = body.child(i)
+                    if member.kind() == "enum_constant":
+                        member_name = member.child_by_field_name("name")
+                        if member_name is not None:
+                            occurrences.append(
+                                RawOccurrence(
+                                    member_name.start_byte(), member_name.end_byte(), True, "enum_member"
+                                )
+                            )
         elif kind in ("method_declaration", "constructor_declaration"):
             name_node = node.child_by_field_name("name")
             if name_node is not None:

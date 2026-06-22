@@ -21,22 +21,36 @@ from app.mapping.schema import ChangeEntry, SanitizationMap
 _WORD_TOKEN = re.compile(r"^\w+$")
 
 
-def _line_col_to_offset(text: str, line: int, col: int) -> int | None:
-    lines = text.split("\n")
-    if line < 1 or line > len(lines):
+def _build_line_offsets(text: str) -> list[int]:
+    """line_offsets[i] -> char offset of the start of line i+1 (1-indexed lines)."""
+    offsets = [0]
+    for i, ch in enumerate(text):
+        if ch == "\n":
+            offsets.append(i + 1)
+    return offsets
+
+
+def _line_col_to_offset(line_offsets: list[int], text_len: int, line: int, col: int) -> int | None:
+    if line < 1 or line > len(line_offsets):
         return None
-    offset = sum(len(l) + 1 for l in lines[: line - 1]) + (col - 1)
-    if offset < 0 or offset > len(text):
+    offset = line_offsets[line - 1] + (col - 1)
+    if offset < 0 or offset > text_len:
         return None
     return offset
 
 
 def _restore_by_position(text: str, changes: list[ChangeEntry]) -> tuple[str, list[ChangeEntry]]:
+    # Built once per file, not per change: changes are applied bottom-to-top
+    # by recorded (line, col), so earlier (smaller-offset) lookups are never
+    # affected by a later splice — the original text's line starts stay valid
+    # for the whole pass, as long as a replacement never adds/removes a
+    # newline (true for identifier/secret/PII token replacements).
+    line_offsets = _build_line_offsets(text)
     ordered = sorted(changes, key=lambda c: (c.start_line, c.start_col), reverse=True)
     remaining: list[ChangeEntry] = []
     for change in ordered:
-        start = _line_col_to_offset(text, change.start_line, change.start_col)
-        end = _line_col_to_offset(text, change.end_line, change.end_col)
+        start = _line_col_to_offset(line_offsets, len(text), change.start_line, change.start_col)
+        end = _line_col_to_offset(line_offsets, len(text), change.end_line, change.end_col)
         if start is None or end is None or text[start:end] != change.replacement:
             remaining.append(change)
             continue

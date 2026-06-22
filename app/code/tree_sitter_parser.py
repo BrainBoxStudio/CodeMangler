@@ -16,7 +16,7 @@ wrong silently:
 from __future__ import annotations
 
 import logging
-from functools import lru_cache
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -46,16 +46,34 @@ def is_available() -> bool:
     return _get_language_pack() is not None
 
 
-@lru_cache(maxsize=None)
+_thread_local = threading.local()
+
+
 def _get_parser(language: str):
+    # tree-sitter-language-pack's Parser is a PyO3 "unsendable" Rust object:
+    # it may only be touched (even dropped) by the thread that created it.
+    # Each sanitize/restore run spawns a brand-new QThread, so a process-wide
+    # cache (e.g. functools.lru_cache) would hand a thread-A-owned Parser to
+    # thread B and panic. Caching per-thread keeps the reuse benefit within a
+    # single run (many files, one thread) without ever crossing threads.
+    cache = getattr(_thread_local, "parsers", None)
+    if cache is None:
+        cache = {}
+        _thread_local.parsers = cache
+    if language in cache:
+        return cache[language]
+
     pack = _get_language_pack()
     if pack is None:
+        cache[language] = None
         return None
     try:
-        return pack.get_parser(language)
+        parser = pack.get_parser(language)
     except Exception:
         logger.warning("tree-sitter: no grammar available for language=%s", language, exc_info=True)
-        return None
+        parser = None
+    cache[language] = parser
+    return parser
 
 
 def parse(language: str, text: str):

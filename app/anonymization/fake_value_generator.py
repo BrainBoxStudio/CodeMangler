@@ -47,8 +47,10 @@ _TEMPLATE_FORMATTERS: dict[str, Callable[[int], str]] = {
     "method": lambda n: f"fn{n:03d}",
     "class": lambda n: f"Cls{n:03d}",
     "struct": lambda n: f"Struct{n:03d}",
+    "typedef": lambda n: f"Type{n:03d}",
     "interface": lambda n: f"Iface{n:03d}",
     "enum": lambda n: f"Enum{n:03d}",
+    "enum_member": lambda n: f"EnumVal{n:03d}",
     "namespace": lambda n: f"Ns{n:03d}",
     "constant": lambda n: f"CONST{n:03d}",
 }
